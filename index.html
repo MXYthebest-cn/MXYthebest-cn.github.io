@@ -2,7 +2,7 @@
 
 <html lang="zh-CN">
 <head>
-<meta name="portfolio-build" content="V4.0.3-hero-renderer-continuity"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
+<meta name="portfolio-build" content="V4.0.4-hero-pre-scan-continuity"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#E1DAD9" name="theme-color"/>
@@ -808,6 +808,16 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
  .t31-scan-char.t31-scanning {color:inherit!important;background:transparent!important}
 }
 </style>
+<style id="v404-hero-pre-scan-continuity">
+/* V4.0.4: slow opacity handoff after BOTH DOM name lines settle; no typography
+   or geometric re-layout. At first autonomous sweep start, mix already equals 1. */
+#wave-hero.wave-live #hero-wave{opacity:var(--v404-hero-canvas,1)}
+#wave-hero.wave-live .name{color:var(--ink)!important;opacity:var(--v404-hero-dom,0)}
+@media(prefers-reduced-motion:reduce){
+  #wave-hero.wave-live .name{opacity:1!important}
+  #wave-hero.wave-live #hero-wave{display:none!important}
+}
+</style>
 </head>
 <body><div aria-hidden="true" class="bg"><div aria-hidden="true" class="world-field" id="world-field"><canvas id="research-canvas"></canvas><div class="world-grain"></div></div><div class="night-overlay" id="night-overlay"></div></div>
 <div aria-hidden="true" class="curtain" id="curtain"><div class="curtain-logo">M / X</div></div>
@@ -1460,16 +1470,39 @@ function allocateTrail(candidate,seconds,reserved){
    }
    }
    function render(sec,elapsed){
+     // V4.0.4: The initial HTML->Canvas swap MUST finish before the first
+     // autonomous sweep. D04's two lines have fully settled by this interval.
+     // Keep the WebGL texture and both typography geometries stationary;
+     // blend visibility only, with no extra deformation or invented mouse path.
+     const PRE_SCAN_CANVAS_START=4.22,PRE_SCAN_CANVAS_END=4.90;
+     const PRE_SCAN_DOM_START=4.95,PRE_SCAN_DOM_END=5.72;
      if(elapsed<T.autoStart){
        phase='off';
-       if(textureReady){
+       if(elapsed>=PRE_SCAN_CANVAS_START){
+         if(!textureReady){
+           root.style.setProperty('--v404-hero-canvas','0');
+           root.style.setProperty('--v404-hero-dom','1');
+           if(!resize())return;
+         }
+         // Two-stage handoff: the underlying ink never dims during the swap.
+         // First paint the same dark pixels on Canvas; only then fade HTML away.
+         const upper=ease((elapsed-PRE_SCAN_CANVAS_START)/(PRE_SCAN_CANVAS_END-PRE_SCAN_CANVAS_START));
+         const lower=1-ease((elapsed-PRE_SCAN_DOM_START)/(PRE_SCAN_DOM_END-PRE_SCAN_DOM_START));
+         root.style.setProperty('--v404-hero-canvas',upper.toFixed(4));
+         root.style.setProperty('--v404-hero-dom',lower.toFixed(4));
+         drawOriginalGL(sec,Array.from({length:10},zeroPt),false);
+       }else if(textureReady){
          if(gls){gls.gl.clearColor(0,0,0,0);gls.gl.clear(gls.gl.COLOR_BUFFER_BIT);}
          else if(ctx2d)ctx2d.clearRect(0,0,width,height);
          root.classList.remove('wave-live');
+         root.style.removeProperty('--v404-hero-canvas');
+         root.style.removeProperty('--v404-hero-dom');
        }
        return;
      }
      if(!textureReady){if(!resize())return;}
+     root.style.setProperty('--v404-hero-canvas','1');
+     root.style.setProperty('--v404-hero-dom','0');
      if(elapsed<T.autoStart+T.autoDuration){
        if(phase!=='auto'){phase='auto';autoCount++;}
        drawOriginalGL(sec,autoPoints(elapsed));
@@ -1555,7 +1588,7 @@ function allocateTrail(candidate,seconds,reserved){
      acceptedSources=0;reclaimedSources=0;queuedSources=0;
      spatiallyCovered=0;spatialEvictions=0;fallbackSelectedHistory=0;
      trailSlots.forEach(slot=>{slot.active=false;slot.strength=0;slot.born=0;slot.x=0;slot.y=0;slot.retireAt=-1;slot.pending=null;});
-     textureReady=false;root.classList.remove('wave-live');
+     textureReady=false;root.classList.remove('wave-live');root.style.removeProperty('--v404-hero-canvas');root.style.removeProperty('--v404-hero-dom');
      if(gls){gls.gl.clearColor(0,0,0,0);gls.gl.clear(gls.gl.COLOR_BUFFER_BIT);}
      else if(ctx2d)ctx2d.clearRect(0,0,width,height);
    }
