@@ -2,7 +2,7 @@
 
 <html lang="zh-CN">
 <head>
-<meta name="portfolio-build" content="V4.0.2-hero-handoff-event-gate"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
+<meta name="portfolio-build" content="V4.0.3-hero-renderer-continuity"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#E1DAD9" name="theme-color"/>
@@ -1486,16 +1486,24 @@ function allocateTrail(candidate,seconds,reserved){
        inputQueue=[];lastPathPoint=null;pendingSegments=[];
        lastRendered=sec;
      }
-     // Touchscreens: one automatic sweep, then stable DOM lettering.
+     // V4.0.3: Keep the SAME raster texture and visible Canvas after the
+     // autonomous sweep. On coarse/touch pointers the old code cleared Canvas
+     // and resurrected DOM glyphs, creating an unconditional layer swap.
+     // There is no touch deformation: zero shader sources draw settled text.
      if(!pointerEnabled){
-       if(gls){gls.gl.clearColor(0,0,0,0);gls.gl.clear(gls.gl.COLOR_BUFFER_BIT)}
-       else if(ctx2d)ctx2d.clearRect(0,0,width,height);
-       root.classList.remove('wave-live');phase='static';return;
+       phase='static';
+       drawOriginalGL(sec,Array.from({length:10},zeroPt),false);
+       lastRendered=sec;
+       return;
      }
-     // One complete input snapshot per animation frame.
+     // Real pointer interaction alone switches from automatic shader tuning
+     // to pointer tuning. With zero active strength, retain the exact automatic
+     // renderer and texture; do NOT swap typography/renderer on the end frame.
      consumePointerInput(sec,elapsed);
      smoothCursor(sec);
-     drawOriginalGL(sec,pointerPoints(sec,elapsed),true);
+     const settledPoints=pointerPoints(sec,elapsed);
+     const activeWarp=settledPoints.some(pt=>pt[2]>.0001);
+     drawOriginalGL(sec,settledPoints,activeWarp);
      lastRendered=sec;
    }
    function reconcileViewportPointer(info){
