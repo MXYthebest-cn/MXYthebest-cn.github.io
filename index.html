@@ -2,7 +2,15 @@
 
 <html lang="zh-CN">
 <head>
-<meta name="portfolio-build" content="V4.0.6-curtain-first-paint-gate"><script>/* Set JS display eligibility before any stylesheet/body paint: never expose the cover before the opening curtain. */document.documentElement.classList.add('js-live','js-enabled');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
+<meta name="portfolio-build" content="V4.0.7-first-paint-root-lock">
+<!-- Critical first-paint gate: protect the document even BEFORE #curtain exists in the streamed HTML. -->
+<style id="v407-critical-first-paint">
+ html{background-color:#2B2026!important}
+ html.js-enabled.v407-opening-armed{background-color:transparent!important}
+ html.js-enabled:not(.v407-opening-armed) body{visibility:hidden!important}
+</style>
+<script>document.documentElement.classList.add('js-live','js-enabled');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
+<noscript><style>html{background-color:#E1DAD9!important}</style></noscript>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#E1DAD9" name="theme-color"/>
@@ -1772,7 +1780,14 @@ if(elapsed<T.autoStart+T.autoDuration){
  // After that, background throttling cannot pause or re-start the elapsed-time clock.
  function startOnce(){
    if(startAt!==null||document.visibilityState!=='visible')return;
+   // V4.0.7: the real curtain is fully painted BEFORE the protected page becomes visible.
+   // The timeline starts only once the cover is armed, so a slow parse/GPU init cannot consume the intro offscreen.
+   curtain.style.display='flex';
+   curtain.style.clipPath='inset(0 0 0% 0)';
+   curtain.style.pointerEvents='auto';
    startAt=now();
+   renderEntrance(0);
+   document.documentElement.classList.add('v407-opening-armed');
    tick();
  }
  function replay(){
@@ -1883,6 +1898,7 @@ if(elapsed<T.autoStart+T.autoDuration){
    if(startAt!==null)manualScanStart=Math.max(mouseStart+0.01,now()-startAt+.8);
  });
  if(reduced){
+   document.documentElement.classList.add('v407-opening-armed');
    curtain.style.display='none';
    for(const l of lines){l.style.opacity='1';l.style.filter='none';l.style.transform='none'}
    for(const el of $$('.reveal-late')){el.style.opacity='1';el.style.transform='none'}
