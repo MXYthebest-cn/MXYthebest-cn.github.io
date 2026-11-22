@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 
 <html lang="zh-CN">
-<head><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
+<head>
+<meta name="portfolio-build" content="V4.0.2-hero-handoff-event-gate"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#E1DAD9" name="theme-color"/>
@@ -898,7 +899,7 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
 (()=>{'use strict';
  const fine=matchMedia('(hover: hover) and (pointer: fine)').matches;
  const reduce=matchMedia('(prefers-reduced-motion: reduce)');
- const pointer={known:false,x:0,y:0,owner:'none',frame:0,realMove:false,scheduled:0};
+ const pointer={known:false,x:0,y:0,owner:'none',frame:0,realMove:false,scrollMoved:false,scheduled:0};
  const hero=document.getElementById('wave-hero');
  const home=document.getElementById('home');
  const finance=document.getElementById('work');
@@ -926,8 +927,8 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
    pointer.frame=0;
    const owner=pointer.known?choose(pointer.x,pointer.y):'none';
    pointer.owner=owner;
-   const snapshot={known:pointer.known,owner,x:pointer.x,y:pointer.y,moved:pointer.realMove};
-   pointer.realMove=false;
+   const snapshot={known:pointer.known,owner,x:pointer.x,y:pointer.y,moved:pointer.realMove,scrolled:pointer.scrollMoved};
+   pointer.realMove=false;pointer.scrollMoved=false;
    window.__T31_HERO_SYNC_POINTER__?.(snapshot);
    window.__T31_FINANCE_SYNC_POINTER__?.(snapshot);
    window.__T31_FINALE_SYNC_POINTER__?.(snapshot);
@@ -947,7 +948,7 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
  window.addEventListener('pointerdown',e=>record(e,true),{capture:true,passive:true});
  window.addEventListener('pointerout',e=>{if(e.relatedTarget===null){pointer.known=false;pointer.realMove=false;schedule()}},{capture:true,passive:true});
  window.addEventListener('wheel',schedule,{passive:true});
- window.addEventListener('scroll',schedule,{passive:true});
+ window.addEventListener('scroll',()=>{pointer.scrollMoved=true;schedule();},{passive:true});
  window.addEventListener('resize',schedule,{passive:true});
  window.addEventListener('blur',()=>{pointer.known=false;schedule()});
  document.addEventListener('visibilitychange',()=>{if(document.hidden)pointer.known=false;schedule()});
@@ -1023,7 +1024,7 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
    // V4.0.1: a synthetic/initial hover is not an intentional interaction.
    // Real pointer motion or wheel travel during the opening can opt in, while
    // post-opening scroll-induced entry remains governed by the spatial coordinator.
-   let introPointerIntent=false, lastPhysicalPointer=null;
+   let introPointerIntent=false, postAutoPointerIntent=false, lastPhysicalPointer=null;
    let mouse={x:.5,y:.5},target={x:.5,y:.5},lastRendered=0;
    let inputQueue=[],recentInput=null,lastPathPoint=null,pendingSegments=[];
    let inputClock=-1,gestureNumber=0,rawSamples=0,moveSamples=0;
@@ -1241,7 +1242,18 @@ function allocateTrail(candidate,seconds,reserved){
        const shifted=(Number.isFinite(e.movementX)&&Number.isFinite(e.movementY)&&
          Math.hypot(e.movementX,e.movementY)>.35)||
          (lastPhysicalPointer && Math.hypot(current.x-lastPhysicalPointer.x,current.y-lastPhysicalPointer.y)>.35);
-       if(shifted)introPointerIntent=true;
+       if(shifted){
+         introPointerIntent=true; // diagnostic only; an old pre-sweep move cannot arm post-sweep takeover
+         if(phase==='pointer'){
+           postAutoPointerIntent=true;
+           if(!pointerOn){
+             pointerOn=true;exitAt=-1;exitLevel=0;spatialEnterAt=clock();
+             const r=root.getBoundingClientRect();
+             target={x:clamp((current.x-r.left)/Math.max(1,r.width)),y:clamp((current.y-r.top)/Math.max(1,r.height))};
+             mouse={...target};inputQueue=[];lastPathPoint=null;pendingSegments=[];
+           }
+         }
+       }
        lastPhysicalPointer=current;
      }
      const events=(type==='move'&&typeof e.getCoalescedEvents==='function')?e.getCoalescedEvents():[];
@@ -1253,6 +1265,9 @@ function allocateTrail(candidate,seconds,reserved){
                  t:pointerInputTimestamp(sample),type:type==='move'?'move':type};
        pt.t=Math.max(inputClock,pt.t);inputClock=pt.t;
        recentInput=pt;
+       // Layout-induced pointerenter/over is not evidence of an intentional new move.
+       // Drop it unless a post-sweep real move or genuine scroll has armed the pointer.
+       if(phase==='pointer'&&type==='enter'&&!pointerOn&&!postAutoPointerIntent){continue;}
        if(inputQueue.length&&Math.hypot(inputQueue[inputQueue.length-1].x-pt.x,inputQueue[inputQueue.length-1].y-pt.y)<.00001&&inputQueue[inputQueue.length-1].type===pt.type)continue;
        if(phase==='pointer'){
          inputQueue.push(pt);rawSamples++;
@@ -1463,14 +1478,12 @@ function allocateTrail(candidate,seconds,reserved){
      if(phase!=='pointer'&&phase!=='static'){
        // Do not automatically warp the settled title just because the mouse
        // happened to be parked there when the page was opened.
-       phase='pointer';pointerOn=pointerEnabled&&inside&&introPointerIntent;exitAt=-1;
+       phase='pointer';pointerOn=false;exitAt=-1;exitLevel=0;spatialEnterAt=-1;
+       // A pre-sweep move followed by a stationary mouse must not create a new
+       // deformation on the handoff frame. The texture remains on the SAME canvas.
+       // Only a FRESH post-sweep real move or scroll entry can re-arm the pointer.
+       postAutoPointerIntent=false;
        inputQueue=[];lastPathPoint=null;pendingSegments=[];
-       if(pointerOn&&recentInput){
-         target={x:recentInput.x,y:recentInput.y};mouse={...target};
-         gestureNumber++;
-         lastPathPoint={...recentInput,gesture:gestureNumber};
-
-       }
        lastRendered=sec;
      }
      // Touchscreens: one automatic sweep, then stable DOM lettering.
@@ -1498,12 +1511,13 @@ function allocateTrail(candidate,seconds,reserved){
        };
        inside=true;recentInput=point;
        if(phase==='pointer'){
-         if(!pointerOn){
+         if(!pointerOn && (info?.moved||info?.scrolled)){
+           postAutoPointerIntent=true;
            pointerOn=true;exitAt=-1;exitLevel=0;spatialEnterAt=at;
            target={x:point.x,y:point.y};mouse={...target};
            // Scroll-induced activation never produces trail samples.
            inputQueue=[];lastPathPoint=null;pendingSegments=[];
-         }else target={x:point.x,y:point.y};
+         }else if(pointerOn)target={x:point.x,y:point.y};
        }
      }else{
        inside=false;
@@ -1527,7 +1541,7 @@ function allocateTrail(candidate,seconds,reserved){
      },150);
    },{passive:true});
    function reset(){
-     phase='off';pointerOn=false;inside=false;exitAt=-1;exitLevel=0;spatialEnterAt=-1;introPointerIntent=false;lastPhysicalPointer=null;
+     phase='off';pointerOn=false;inside=false;exitAt=-1;exitLevel=0;spatialEnterAt=-1;introPointerIntent=false;postAutoPointerIntent=false;lastPhysicalPointer=null;
      inputQueue=[];recentInput=null;lastPathPoint=null;pendingSegments=[];inputClock=-1;
      gestureNumber=0;rawSamples=0;moveSamples=0;lastRendered=0;
      acceptedSources=0;reclaimedSources=0;queuedSources=0;
