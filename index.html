@@ -2,7 +2,7 @@
 
 <html lang="zh-CN">
 <head>
-<meta name="portfolio-build" content="V4.0.4-hero-pre-scan-continuity"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
+<meta name="portfolio-build" content="V4.0.5-hero-single-source-raster"><script>document.documentElement.classList.add('js-live');if(matchMedia('(prefers-reduced-motion:reduce)').matches)document.documentElement.classList.add('motion-reduced');</script>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1, viewport-fit=cover" name="viewport"/>
 <meta content="#E1DAD9" name="theme-color"/>
@@ -808,16 +808,24 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
  .t31-scan-char.t31-scanning {color:inherit!important;background:transparent!important}
 }
 </style>
-<style id="v404-hero-pre-scan-continuity">
-/* V4.0.4: slow opacity handoff after BOTH DOM name lines settle; no typography
-   or geometric re-layout. At first autonomous sweep start, mix already equals 1. */
-#wave-hero.wave-live #hero-wave{opacity:var(--v404-hero-canvas,1)}
-#wave-hero.wave-live .name{color:var(--ink)!important;opacity:var(--v404-hero-dom,0)}
-@media(prefers-reduced-motion:reduce){
-  #wave-hero.wave-live .name{opacity:1!important}
-  #wave-hero.wave-live #hero-wave{display:none!important}
-}
-</style>
+<style id="v405-single-source-hero">
+ /* Single visible glyph source for ALL normal-mode hero frames:
+    DOM text participates in layout/accessibility only; one canvas raster is
+    used for the first appearance, the autonomous sweep and pointer trails.
+    The measure state removes the invisible DOM ink transforms *before*
+    geometry is sampled; it does not affect the approved box dimensions. */
+ #wave-hero.wave-measure .name-line i{
+   transition:none!important;transform:none!important;filter:none!important;
+ }
+ #wave-hero.wave-live .name{
+   opacity:0!important;color:transparent!important;
+ }
+ #wave-hero.wave-live #hero-wave{opacity:1!important}
+ @media(prefers-reduced-motion:reduce){
+   #wave-hero.wave-live .name{opacity:1!important;color:var(--ink)!important}
+   #wave-hero.wave-live #hero-wave{display:none!important}
+ }
+ </style>
 </head>
 <body><div aria-hidden="true" class="bg"><div aria-hidden="true" class="world-field" id="world-field"><canvas id="research-canvas"></canvas><div class="world-grain"></div></div><div class="night-overlay" id="night-overlay"></div></div>
 <div aria-hidden="true" class="curtain" id="curtain"><div class="curtain-logo">M / X</div></div>
@@ -1009,7 +1017,8 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
    if(reduced)return null; // Auto sweep is available on touchscreens; pointer interactivity is not.
    const pointerEnabled=fine;
    const root=waveRoot,base=$('#name');
-   let drawCanvas=canvas,ctx2d=null,gls=null,src=null,width=0,height=0;
+   let drawCanvas=canvas,ctx2d=null,gls=null,src=null,width=0,height=0,splitPx=0;
+    let rasterBuilds=0,heroSingleSourceReady=false;
    // Raw pointer history describes motion; only selected stable slots drive deformation.
    // v16-A: each live source keeps its own amplitude. No global normalization
    // may silently shrink all historical points when more strokes arrive.
@@ -1047,12 +1056,79 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
    const zeroPt=()=>[0,0,0,0];
  function compile(gl,type,s){const o=gl.createShader(type);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(o));return o}
  function initGL(){try{const gl=drawCanvas.getContext('webgl',{alpha:true,antialias:true,powerPreference:'low-power'});if(!gl)return false;
-   const v=`attribute vec2 a; varying vec2 uv; void main(){ uv=(a+1.0)*0.5;gl_Position=vec4(a,0.,1.);}`;
-   const f=`precision mediump float; varying vec2 uv; uniform sampler2D tex; uniform vec2 size; uniform float secs; uniform float falloff; uniform float warpGain; uniform float maxWarpPx; uniform vec4 pt[10]; void main(){vec2 p=vec2(uv.x,1.-uv.y);float dx=0.;float dy=0.; for(int i=0;i<10;i++){vec2 d=(p-pt[i].xy)*vec2(size.x/max(size.y,1.),1.);float r=length(d);float m=pt[i].z*exp(-r*r*falloff);float ph=r*29.-secs*5.2+float(i)*.25; dx+=(sin(ph)*.013+d.y*cos(ph)*.009)*m;dy+=(cos(ph*.84)*.009+d.x*sin(ph)*.006)*m;} if(maxWarpPx>0.){dx*=warpGain;dy*=warpGain;vec2 deltaPx=vec2(dx*size.x,dy*size.y);float lenPx=length(deltaPx);float knee=maxWarpPx*.68;if(lenPx>knee){float room=max(maxWarpPx-knee,.001);float limited=knee+room*(1.-exp(-(lenPx-knee)/room));deltaPx*=limited/max(lenPx,.001);dx=deltaPx.x/max(size.x,1.);dy=deltaPx.y/max(size.y,1.);}}vec4 col=texture2D(tex,vec2(p.x+dx,1.-p.y-dy));gl_FragColor=col;}`;
+   const v=`attribute vec2 a; varying vec2 uv; void main(){ uv=(a+1.0)*0.5;gl_Position=vec4(a,0.,1.);}`;    const f=`precision mediump float;
+      varying vec2 uv;
+      uniform sampler2D tex;
+      uniform vec2 size;
+      uniform float secs;
+      uniform float falloff;
+      uniform float warpGain;
+      uniform float maxWarpPx;
+      uniform vec4 pt[10];
+      // (upper alpha, lower alpha, upper vertical shift, lower vertical shift)
+      uniform vec4 intro;
+      uniform vec2 introBlur;
+      uniform float splitY;
+      // One immutable text raster is sampled during entrance and during all
+      // later warps. No DOM-vs-Canvas replacement at the first sweep boundary.
+      vec4 sampleInk(vec2 q, float blur){
+        vec2 tc=vec2(q.x,1.-q.y);
+        vec4 color=texture2D(tex,tc);
+        if(blur>0.00001){
+          // A light three-tap blur, only while a line is appearing.
+          color=color*.56
+            +texture2D(tex,tc+vec2(0.,blur))*.22
+            +texture2D(tex,tc-vec2(0.,blur))*.22;
+        }
+        return color;
+      }
+      void main(){
+        vec2 p=vec2(uv.x,1.-uv.y);
+        float dx=0.;float dy=0.;
+        for(int i=0;i<10;i++){
+          vec2 d=(p-pt[i].xy)*vec2(size.x/max(size.y,1.),1.);
+          float r=length(d);
+          float m=pt[i].z*exp(-r*r*falloff);
+          float ph=r*29.-secs*5.2+float(i)*.25;
+          dx+=(sin(ph)*.013+d.y*cos(ph)*.009)*m;
+          dy+=(cos(ph*.84)*.009+d.x*sin(ph)*.006)*m;
+        }
+        if(maxWarpPx>0.){
+          dx*=warpGain;dy*=warpGain;
+          vec2 deltaPx=vec2(dx*size.x,dy*size.y);
+          float lenPx=length(deltaPx);
+          float knee=maxWarpPx*.68;
+          if(lenPx>knee){
+            float room=max(maxWarpPx-knee,.001);
+            float limited=knee+room*(1.-exp(-(lenPx-knee)/room));
+            deltaPx*=limited/max(lenPx,.001);
+            dx=deltaPx.x/max(size.x,1.);
+            dy=deltaPx.y/max(size.y,1.);
+          }
+        }
+        vec2 q=vec2(p.x+dx,p.y+dy);
+        vec4 col;
+        if(intro.x>=0.9999&&intro.y>=0.9999&&abs(intro.z)<0.00001&&abs(intro.w)<0.00001){
+          // At rest and on EVERY autonomous/pointer frame this is the original
+          // liquid shader's exact texture sampling path.
+          col=texture2D(tex,vec2(q.x,1.-q.y));
+        }else{
+          vec2 q0=q-vec2(0.,intro.z);
+          vec2 q1=q-vec2(0.,intro.w);
+          vec4 c0=sampleInk(q0,introBlur.x)*(q0.y<splitY?intro.x:0.);
+          vec4 c1=sampleInk(q1,introBlur.y)*(q1.y>=splitY?intro.y:0.);
+          // Both lines have the same ink color; normalized alpha preserves
+          // the original color without turning the two-line blend grey.
+          float a=min(1.,c0.a+c1.a);
+          vec3 rgb=(c0.rgb*c0.a+c1.rgb*c1.a)/max(c0.a+c1.a,.00001);
+          col=vec4(rgb,a);
+        }
+        gl_FragColor=col;
+      }`;
    const prog=gl.createProgram();gl.attachShader(prog,compile(gl,gl.VERTEX_SHADER,v));gl.attachShader(prog,compile(gl,gl.FRAGMENT_SHADER,f));gl.linkProgram(prog);if(!gl.getProgramParameter(prog,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(prog));gl.useProgram(prog);
    const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);const pos=gl.getAttribLocation(prog,'a');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
    const tex=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
-   gl.uniform1i(gl.getUniformLocation(prog,'tex'),0);gls={gl,tex,loc:{size:gl.getUniformLocation(prog,'size'),pt:gl.getUniformLocation(prog,'pt[0]'),secs:gl.getUniformLocation(prog,'secs'),falloff:gl.getUniformLocation(prog,'falloff'),warpGain:gl.getUniformLocation(prog,'warpGain'),maxWarpPx:gl.getUniformLocation(prog,'maxWarpPx')}};return true;
+   gl.uniform1i(gl.getUniformLocation(prog,'tex'),0);gls={gl,tex,program:prog,loc:{size:gl.getUniformLocation(prog,'size'),pt:gl.getUniformLocation(prog,'pt[0]'),secs:gl.getUniformLocation(prog,'secs'),falloff:gl.getUniformLocation(prog,'falloff'),warpGain:gl.getUniformLocation(prog,'warpGain'),maxWarpPx:gl.getUniformLocation(prog,'maxWarpPx'),intro:gl.getUniformLocation(prog,'intro'),introBlur:gl.getUniformLocation(prog,'introBlur'),splitY:gl.getUniformLocation(prog,'splitY')}};return true;
  }catch(e){console.warn('Letter WebGL unavailable, using 2D',e);return false}}
 
    function init2D(){
@@ -1065,8 +1141,11 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
      marker.style.cssText='display:inline-block;vertical-align:baseline;width:0;height:0;max-height:0;padding:0;border:0;margin:0;overflow:hidden';
      el.appendChild(marker);const y=marker.getBoundingClientRect().bottom;marker.remove();return y;
    }
-   function resize(){
-     const rect=root.getBoundingClientRect();if(rect.width<20||rect.height<20)return false;
+       function resize(){
+      // The semantic HTML never becomes visible when this succeeds. Sample
+      // stable geometry before any entrance transform, even at t = 0.
+      root.classList.add('wave-measure');
+      const rect=root.getBoundingClientRect();if(rect.width<20||rect.height<20)return false;
      const dpr=Math.min(2,devicePixelRatio||1);
      width=Math.max(1,Math.round(rect.width*dpr));height=Math.max(1,Math.round(rect.height*dpr));
      drawCanvas.width=width;drawCanvas.height=height;
@@ -1079,13 +1158,40 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
        c.fillStyle=getComputedStyle(document.body).color;c.textBaseline='alphabetic';
        c.fillText(el.textContent.trim(),b.x-rect.x,domBaseline(el)-rect.y);
      }
-     src=off;
-     if(gls){const {gl,tex}=gls;gl.viewport(0,0,width,height);gl.bindTexture(gl.TEXTURE_2D,tex);
-       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);}
-     textureReady=true;
-     // Transition to WebGL only when the text has reached its settled DOM position.
-     root.classList.add('wave-live');
-     return true;
+           src=off;
+      // Find the true empty-ink gap between the two lines so entrance motion
+      // can animate both halves of this ONE raster without clip artifacts.
+      const alphaPixels=c.getImageData(0,0,width,height).data;
+      const occupied=[];
+      for(let row=0;row<height;row++){
+        let ink=false;
+        for(let x=0;x<width;x+=2){
+          if(alphaPixels[(row*width+x)*4+3]>5){ink=true;break;}
+        }
+        if(ink)occupied.push(row);
+      }
+      // Choose the longest zero-ink run between 20% and 90% of all ink rows.
+      // If the font is unusually tight, use the geometric halfway mark.
+      splitPx=Math.round(height*.5);
+      if(occupied.length>=2){
+        const lo=occupied[Math.floor(occupied.length*.20)];
+        const hi=occupied[Math.floor(occupied.length*.90)];
+        let best=0;
+        for(let k=1;k<occupied.length;k++){
+          const a=occupied[k-1],b=occupied[k];
+          if(a<lo||b>hi)continue;
+          if(b-a>best){best=b-a;splitPx=Math.round((a+b)/2);}
+        }
+      }
+      if(gls){const {gl,tex}=gls;gl.viewport(0,0,width,height);gl.bindTexture(gl.TEXTURE_2D,tex);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,src);
+        gl.useProgram(gls.program);
+        gl.uniform1f(gls.loc.splitY,splitPx/height);
+      }
+      textureReady=true;rasterBuilds++;
+      root.classList.add('wave-live');
+      heroSingleSourceReady=true;
+      return true;
    }
    // ===== Unified pointer control layer. There is no independent exit shock. =====
    function activeWeight(seconds,elapsed){
@@ -1382,7 +1488,7 @@ function allocateTrail(candidate,seconds,reserved){
      const weight=.39*Math.max(0,fade);
      return Array.from({length:10},(_,i)=>[.08+i*.094,y,weight,0]);
    }
-   function drawOriginalGL(seconds,pts,isPointer=false){
+   function drawOriginalGL(seconds,pts,isPointer=false,introParams=null){
      if(!src)return;
      if(gls){const {gl,loc}=gls;
        gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
@@ -1395,11 +1501,32 @@ function allocateTrail(candidate,seconds,reserved){
        const dpr=Math.min(2,devicePixelRatio||1);
        gl.uniform1f(loc.warpGain,isPointer?cfg.warpGain:1.0);
        gl.uniform1f(loc.maxWarpPx,isPointer?cfg.maxWarpCssPx*dpr:0);
-       gl.uniform4fv(loc.pt,new Float32Array(pts.flat()));
-       gl.drawArrays(gl.TRIANGLES,0,6);
+               gl.uniform4fv(loc.pt,new Float32Array(pts.flat()));
+        const intro=introParams||[1,1,0,0,0,0];
+        gl.uniform4f(loc.intro,intro[0],intro[1],intro[2],intro[3]);
+        gl.uniform2f(loc.introBlur,intro[4],intro[5]);
+        gl.drawArrays(gl.TRIANGLES,0,6);
      } else if(ctx2d){
-     ctx2d.clearRect(0,0,width,height);ctx2d.drawImage(src,0,0);
-     if(!window.__rippleOverlay){window.__rippleOverlay=document.createElement('canvas')}
+           ctx2d.clearRect(0,0,width,height);
+      if(introParams){
+        // Same source bitmap and same entrance timing in Canvas2D fallback.
+        const [a0,a1,dy0,dy1,blur0,blur1]=introParams;
+        if(a0>0){
+          ctx2d.save();ctx2d.globalAlpha=a0;
+          ctx2d.filter=blur0>0?`blur(${(blur0*height).toFixed(2)}px)`:'none';
+          ctx2d.drawImage(src,0,0,width,splitPx,0,dy0*height,width,splitPx);
+          ctx2d.restore();
+        }
+        if(a1>0){
+          ctx2d.save();ctx2d.globalAlpha=a1;
+          ctx2d.filter=blur1>0?`blur(${(blur1*height).toFixed(2)}px)`:'none';
+          ctx2d.drawImage(src,0,splitPx,width,height-splitPx,0,splitPx+dy1*height,width,height-splitPx);
+          ctx2d.restore();
+        }
+        return;
+      }
+      ctx2d.drawImage(src,0,0);
+      if(!window.__rippleOverlay){window.__rippleOverlay=document.createElement('canvas')}
      const overlay=window.__rippleOverlay;
      if(overlay.width!==width||overlay.height!==height){overlay.width=width;overlay.height=height}
      const tc=overlay.getContext('2d');
@@ -1469,41 +1596,28 @@ function allocateTrail(candidate,seconds,reserved){
      }
    }
    }
-   function render(sec,elapsed){
-     // V4.0.4: The initial HTML->Canvas swap MUST finish before the first
-     // autonomous sweep. D04's two lines have fully settled by this interval.
-     // Keep the WebGL texture and both typography geometries stationary;
-     // blend visibility only, with no extra deformation or invented mouse path.
-     const PRE_SCAN_CANVAS_START=4.22,PRE_SCAN_CANVAS_END=4.90;
-     const PRE_SCAN_DOM_START=4.95,PRE_SCAN_DOM_END=5.72;
-     if(elapsed<T.autoStart){
-       phase='off';
-       if(elapsed>=PRE_SCAN_CANVAS_START){
-         if(!textureReady){
-           root.style.setProperty('--v404-hero-canvas','0');
-           root.style.setProperty('--v404-hero-dom','1');
-           if(!resize())return;
-         }
-         // Two-stage handoff: the underlying ink never dims during the swap.
-         // First paint the same dark pixels on Canvas; only then fade HTML away.
-         const upper=ease((elapsed-PRE_SCAN_CANVAS_START)/(PRE_SCAN_CANVAS_END-PRE_SCAN_CANVAS_START));
-         const lower=1-ease((elapsed-PRE_SCAN_DOM_START)/(PRE_SCAN_DOM_END-PRE_SCAN_DOM_START));
-         root.style.setProperty('--v404-hero-canvas',upper.toFixed(4));
-         root.style.setProperty('--v404-hero-dom',lower.toFixed(4));
-         drawOriginalGL(sec,Array.from({length:10},zeroPt),false);
-       }else if(textureReady){
-         if(gls){gls.gl.clearColor(0,0,0,0);gls.gl.clear(gls.gl.COLOR_BUFFER_BIT);}
-         else if(ctx2d)ctx2d.clearRect(0,0,width,height);
-         root.classList.remove('wave-live');
-         root.style.removeProperty('--v404-hero-canvas');
-         root.style.removeProperty('--v404-hero-dom');
-       }
-       return;
-     }
-     if(!textureReady){if(!resize())return;}
-     root.style.setProperty('--v404-hero-canvas','1');
-     root.style.setProperty('--v404-hero-dom','0');
-     if(elapsed<T.autoStart+T.autoDuration){
+       function render(sec,elapsed){
+      // V4.0.5: one raster, one visible canvas from the FIRST glyph frame.
+      // Never expose a second visible HTML glyph layer in normal mode.
+      if(!textureReady){if(!resize())return;}
+      if(elapsed<T.autoStart){
+        phase='off';
+        const a0=appear(elapsed,T.nameStart,1.10);
+        const a1=appear(elapsed,T.nameStart+.19,1.10);
+        const heightCss=Math.max(1,root.getBoundingClientRect().height);
+        const size0=parseFloat(getComputedStyle(lines[0]).fontSize);
+        const size1=parseFloat(getComputedStyle(lines[1]).fontSize);
+        const dy0=(1-a0)*.44*size0/heightCss;
+        const dy1=(1-a1)*.44*size1/heightCss;
+        // Same two-line stagger, opacity, lift and fading blur as D04.
+        const dpr=Math.min(2,devicePixelRatio||1);
+        const blur0=(1-a0)*7*dpr/height;
+        const blur1=(1-a1)*7*dpr/height;
+        drawOriginalGL(sec,Array.from({length:10},zeroPt),false,
+          [a0,a1,dy0,dy1,blur0,blur1]);
+        return;
+      }
+if(elapsed<T.autoStart+T.autoDuration){
        if(phase!=='auto'){phase='auto';autoCount++;}
        drawOriginalGL(sec,autoPoints(elapsed));
        return;
@@ -1588,7 +1702,7 @@ function allocateTrail(candidate,seconds,reserved){
      acceptedSources=0;reclaimedSources=0;queuedSources=0;
      spatiallyCovered=0;spatialEvictions=0;fallbackSelectedHistory=0;
      trailSlots.forEach(slot=>{slot.active=false;slot.strength=0;slot.born=0;slot.x=0;slot.y=0;slot.retireAt=-1;slot.pending=null;});
-     textureReady=false;root.classList.remove('wave-live');root.style.removeProperty('--v404-hero-canvas');root.style.removeProperty('--v404-hero-dom');
+     textureReady=false;heroSingleSourceReady=false;root.classList.remove('wave-live','wave-measure');
      if(gls){gls.gl.clearColor(0,0,0,0);gls.gl.clear(gls.gl.COLOR_BUFFER_BIT);}
      else if(ctx2d)ctx2d.clearRect(0,0,width,height);
    }
@@ -1596,7 +1710,7 @@ function allocateTrail(candidate,seconds,reserved){
    return {render,reset,reconcileViewportPointer,
      get phase(){return phase},get autoCount(){return autoCount},
      get energy(){const sec=clock();return activeWeight(sec,startAt===null?0:sec-startAt)},
-     get textureReady(){return textureReady},
+     get textureReady(){return textureReady},get singleSourceReady(){return heroSingleSourceReady},get rasterBuilds(){return rasterBuilds},get rasterSplitPx(){return splitPx},
      get active(){return phase==='pointer'&&pointerOn},
      get pointerEnabled(){return pointerEnabled},
      get pointerInside(){return inside},get introPointerIntent(){return introPointerIntent},get handoffSeconds(){return HANDOFF},get rippleMode(){return gls?'webgl':'canvas2d'},
@@ -1794,7 +1908,7 @@ function allocateTrail(candidate,seconds,reserved){
    get waveActive(){return ripple?.active??false},
    get waveEnergy(){return ripple?.energy??0},
    get variant(){return 'D04-02-A-v18'},
-   get rippleMode(){return ripple?.rippleMode??'none'},
+   get rippleMode(){return ripple?.rippleMode??'none'},get singleSource(){return ripple?.singleSourceReady??false},get sourceRasterBuilds(){return ripple?.rasterBuilds??0},get rasterSplitPx(){return ripple?.rasterSplitPx??0},
    get exitHold(){return ripple?.exitHold??null},
    get exitFade(){return ripple?.exitFade??null},
    get pointerEnabled(){return ripple?.pointerEnabled??false},
