@@ -770,7 +770,7 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
   html #work .v8-anchor-finance{transform:none!important;}
 }
 </style>
-<meta name="t31-integrated-build" content="D07-26 v21 · 2026-11-22 · finance/photo visible occupancy handoff + unchanged 520px/s scanner"/>
+<meta name="t31-integrated-build" content="V4.0.1 · 2026-11-22 · hero autonomous scan to pointer continuity hotfix"/>
 <style id="t31-v16-finance-bilingual">
 /* D07-20: one compact bilingual CN/EN thesis pair per financial scene.
    Do not alter the existing headings, category labels, scene anchors or film heights. */
@@ -1013,13 +1013,17 @@ html.js-live:not(.motion-reduced) #work .panel-finance .v8-motion{
    const SPATIAL_SPACING_MIN=68,SPATIAL_SPACING_MAX=165;
    let spatiallyCovered=0,spatialEvictions=0,fallbackSelectedHistory=0;
    const coverageSpacing=()=>clamp(root.clientWidth/8.15,SPATIAL_SPACING_MIN,SPATIAL_SPACING_MAX);
-   const SLOT_HANDOFF_OUT=.045,HANDOFF=.28;
+   const SLOT_HANDOFF_OUT=.045,HANDOFF=.72; // V4.0.1: gradual automatic-to-pointer handoff
    const TAIL_DISTANCE_PX=38,MIN_SOURCE_SEPARATION_PX=28;
    const V16_VISUAL=Object.freeze({trailLife:2.40,trailStrength:.245,mainGain:1.18,warpGain:1.0,pointerFalloff:23.0,maxWarpCssPx:42,tailHold:.0,tailFloor:0,fallbackShiftGain:1.0,fallbackRadius:1.12});
    const V17_VISUAL=Object.freeze({trailLife:2.90,trailStrength:.37,mainGain:1.28,warpGain:1.28,pointerFalloff:17.0,maxWarpCssPx:60,tailHold:.84,tailFloor:.58,fallbackShiftGain:1.32,fallbackRadius:1.22});
    let visualMode='v17';
    const visual=()=>visualMode==='v17'?V17_VISUAL:V16_VISUAL;
    let pointerOn=false,inside=false,exitAt=-1,exitLevel=0,spatialEnterAt=-1;
+   // V4.0.1: a synthetic/initial hover is not an intentional interaction.
+   // Real pointer motion or wheel travel during the opening can opt in, while
+   // post-opening scroll-induced entry remains governed by the spatial coordinator.
+   let introPointerIntent=false, lastPhysicalPointer=null;
    let mouse={x:.5,y:.5},target={x:.5,y:.5},lastRendered=0;
    let inputQueue=[],recentInput=null,lastPathPoint=null,pendingSegments=[];
    let inputClock=-1,gestureNumber=0,rawSamples=0,moveSamples=0;
@@ -1232,6 +1236,14 @@ function allocateTrail(candidate,seconds,reserved){
    function appendPointerEvent(type,e){
      if(!pointerEnabled||e.pointerType==='touch')return;
      const rect=root.getBoundingClientRect();
+     if(type==='move'){
+       const current={x:e.clientX,y:e.clientY};
+       const shifted=(Number.isFinite(e.movementX)&&Number.isFinite(e.movementY)&&
+         Math.hypot(e.movementX,e.movementY)>.35)||
+         (lastPhysicalPointer && Math.hypot(current.x-lastPhysicalPointer.x,current.y-lastPhysicalPointer.y)>.35);
+       if(shifted)introPointerIntent=true;
+       lastPhysicalPointer=current;
+     }
      const events=(type==='move'&&typeof e.getCoalescedEvents==='function')?e.getCoalescedEvents():[];
      const samples=events.length?[...events,e]:[e];
      for(let i=0;i<samples.length;i++){
@@ -1449,7 +1461,9 @@ function allocateTrail(candidate,seconds,reserved){
        return;
      }
      if(phase!=='pointer'&&phase!=='static'){
-       phase='pointer';pointerOn=pointerEnabled&&inside;exitAt=-1;
+       // Do not automatically warp the settled title just because the mouse
+       // happened to be parked there when the page was opened.
+       phase='pointer';pointerOn=pointerEnabled&&inside&&introPointerIntent;exitAt=-1;
        inputQueue=[];lastPathPoint=null;pendingSegments=[];
        if(pointerOn&&recentInput){
          target={x:recentInput.x,y:recentInput.y};mouse={...target};
@@ -1477,6 +1491,7 @@ function allocateTrail(candidate,seconds,reserved){
      const eligible=!!info?.known&&info.owner==='hero'&&
        info.x>=rect.left&&info.x<=rect.right&&info.y>=rect.top&&info.y<=rect.bottom;
      if(eligible){
+       if(info?.moved)introPointerIntent=true;
        const at=clock(),point={
          x:clamp((info.x-rect.left)/Math.max(1,rect.width)),
          y:clamp((info.y-rect.top)/Math.max(1,rect.height)),t:at,type:'enter'
@@ -1499,6 +1514,9 @@ function allocateTrail(candidate,seconds,reserved){
        }
      }
    }
+   // A wheel that carries the title into a stationary pointer is intentional.
+   window.addEventListener('wheel',()=>{if(inside&&phase!=='pointer')introPointerIntent=true;},{passive:true});
+   window.addEventListener('scroll',()=>{if(inside&&phase!=='pointer')introPointerIntent=true;},{passive:true});
    root.addEventListener('pointerenter',e=>appendPointerEvent('enter',e),{passive:true});
    root.addEventListener('pointermove',e=>appendPointerEvent('move',e),{passive:true});
    root.addEventListener('pointerleave',e=>appendPointerEvent('leave',e),{passive:true});
@@ -1509,7 +1527,7 @@ function allocateTrail(candidate,seconds,reserved){
      },150);
    },{passive:true});
    function reset(){
-     phase='off';pointerOn=false;inside=false;exitAt=-1;exitLevel=0;spatialEnterAt=-1;
+     phase='off';pointerOn=false;inside=false;exitAt=-1;exitLevel=0;spatialEnterAt=-1;introPointerIntent=false;lastPhysicalPointer=null;
      inputQueue=[];recentInput=null;lastPathPoint=null;pendingSegments=[];inputClock=-1;
      gestureNumber=0;rawSamples=0;moveSamples=0;lastRendered=0;
      acceptedSources=0;reclaimedSources=0;queuedSources=0;
@@ -1526,7 +1544,7 @@ function allocateTrail(candidate,seconds,reserved){
      get textureReady(){return textureReady},
      get active(){return phase==='pointer'&&pointerOn},
      get pointerEnabled(){return pointerEnabled},
-     get pointerInside(){return inside},get rippleMode(){return gls?'webgl':'canvas2d'},
+     get pointerInside(){return inside},get introPointerIntent(){return introPointerIntent},get handoffSeconds(){return HANDOFF},get rippleMode(){return gls?'webgl':'canvas2d'},
      get exitHold(){return 0},get exitFade(){return FADE},
      get handoffWeight(){return startAt===null?0:cursorBlend(clock()-startAt)},
      get trailCount(){return trailSlots.filter(s=>s.active).length},get recordedSamples(){return moveSamples},
@@ -1729,6 +1747,8 @@ function allocateTrail(candidate,seconds,reserved){
    get autoCount(){return ripple?.autoCount??0},
    get elapsed(){return startAt===null?0:now()-startAt},
    get pointerInside(){return ripple?.pointerInside??false},
+   get introPointerIntent(){return ripple?.introPointerIntent??false},
+   get handoffSeconds(){return ripple?.handoffSeconds??null},
    get handoffWeight(){return ripple?.handoffWeight??0},
    get trailCount(){return ripple?.trailCount??0},
    get recordedSamples(){return ripple?.recordedSamples??0},
